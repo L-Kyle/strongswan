@@ -56,6 +56,8 @@ METHOD(rng_t, get_bytes, bool,
 	private_botan_random_t *this, size_t bytes, uint8_t *buffer)
 {
 	botan_rng_t rng;
+
+	/* FIXME: couldn't this be done in the constructor? */
 	if (botan_rng_init(&rng, this->rng_name))
 	{
 		return FALSE;
@@ -90,7 +92,7 @@ METHOD(rng_t, destroy, void,
 }
 
 /*
- * Described in header.
+ * Described in header
  */
 botan_random_t *botan_rng_create(rng_quality_t quality)
 {
