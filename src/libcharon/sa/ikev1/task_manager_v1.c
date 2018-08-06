@@ -920,8 +920,9 @@ static bool process_dpd(private_task_manager_t *this, message_t *message)
 	}
 	else /* DPD_R_U_THERE_ACK */
 	{
-		if (seq == this->dpd_send - 1)
+		if (seq == this->dpd_send)
 		{
+			this->dpd_send++;
 			this->ike_sa->set_statistic(this->ike_sa, STAT_INBOUND,
 										time_monotonic(NULL));
 		}
@@ -1843,7 +1844,7 @@ METHOD(task_manager_t, queue_dpd, void,
 	uint32_t t, retransmit;
 
 	queue_task(this, (task_t*)isakmp_dpd_create(this->ike_sa, DPD_R_U_THERE,
-												this->dpd_send++));
+												this->dpd_send));
 	peer_cfg = this->ike_sa->get_peer_cfg(this->ike_sa);
 
 	/* compute timeout in milliseconds */
