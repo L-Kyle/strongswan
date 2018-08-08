@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2014 Tobias Brunner
+ * Copyright (C) 2013-2018 Tobias Brunner
  * Copyright (C) 2006-2013 Martin Willi
  * HSR Hochschule fuer Technik Rapperswil
  *
@@ -162,7 +162,12 @@ static spinlock_t *lock;
 /**
  * Is leak detection currently enabled?
  */
-static bool enabled = FALSE;
+static bool enabled;
+
+/**
+ * Whether to report calls to free() with memory not allocated by us
+ */
+static bool ignore_unknown;
 
 /**
  * Is leak detection disabled for the current thread?
@@ -887,7 +892,7 @@ HOOK(void, free, void *ptr)
 		return;
 	}
 	/* allow freeing of NULL */
-	if (ptr == NULL)
+	if (!ptr)
 	{
 		return;
 	}
@@ -898,17 +903,24 @@ HOOK(void, free, void *ptr)
 	if (hdr->magic != MEMORY_HEADER_MAGIC ||
 		tail->magic != MEMORY_TAIL_MAGIC)
 	{
+		/* check if memory was appears to be allocated by our hooks */
 		if (has_hdr(hdr))
 		{
-			/* memory was allocated by our hooks but is corrupted */
 			fprintf(stderr, "freeing corrupted memory (%p): "
 					"header magic 0x%x, tail magic 0x%x:\n",
 					ptr, hdr->magic, tail->magic);
 		}
 		else
 		{
-			/* memory was not allocated by our hooks */
-			fprintf(stderr, "freeing invalid memory (%p)\n", ptr);
+			real_free(ptr);
+
+			if (ignore_unknown)
+			{
+				fprintf(stderr, "freeing (ignored) unknown memory (%p)\n", ptr);
+				enable_thread(before);
+				return;
+			}
+			fprintf(stderr, "freeing unknown memory (%p)\n", ptr);
 		}
 		backtrace = backtrace_create(2);
 		backtrace->log(backtrace, stderr, TRUE);
@@ -937,19 +949,19 @@ HOOK(void*, realloc, void *old, size_t bytes)
 	memory_header_t *hdr;
 	memory_tail_t *tail;
 	backtrace_t *backtrace;
-	bool before;
+	bool before, destroy_old_bt = TRUE;
 
 	if (!enabled || thread_disabled->get(thread_disabled))
 	{
 		return real_realloc(old, bytes);
 	}
 	/* allow reallocation of NULL */
-	if (old == NULL)
+	if (!old)
 	{
 		return malloc(bytes);
 	}
 	/* handle zero size as a free() */
-	if (bytes == 0)
+	if (!bytes)
 	{
 		free(old);
 		return NULL;
@@ -958,22 +970,43 @@ HOOK(void*, realloc, void *old, size_t bytes)
 	hdr = old - sizeof(memory_header_t);
 	tail = old + hdr->bytes;
 
-	remove_hdr(hdr);
-
 	if (hdr->magic != MEMORY_HEADER_MAGIC ||
 		tail->magic != MEMORY_TAIL_MAGIC)
 	{
-		fprintf(stderr, "reallocating invalid memory (%p):\n"
-				"header magic 0x%x:\n", old, hdr->magic);
-		backtrace = backtrace_create(2);
-		backtrace->log(backtrace, stderr, TRUE);
-		backtrace->destroy(backtrace);
+		/* check if memory appears to be allocated by us */
+		if (has_hdr(hdr))
+		{
+			fprintf(stderr, "reallocating corrupted memory (%p): "
+					"header magic 0x%x, tail magic 0x%x:\n", old, hdr->magic,
+					tail->magic);
+			backtrace = backtrace_create(2);
+			backtrace->log(backtrace, stderr, TRUE);
+			backtrace->destroy(backtrace);
+			/* only destroy the old backtrace if the header magic is intact */
+			destroy_old_bt = hdr->magic == MEMORY_HEADER_MAGIC;
+		}
+		else
+		{
+			destroy_old_bt = FALSE;
+			hdr = old;
+
+			if (!ignore_unknown)
+			{
+				fprintf(stderr, "reallocating unknown memory (%p)\n", old);
+				backtrace = backtrace_create(2);
+				backtrace->log(backtrace, stderr, TRUE);
+				backtrace->destroy(backtrace);
+			}
+		}
 	}
 	else
 	{
 		/* clear tail magic, allocate, set tail magic */
 		memset(&tail->magic, MEMORY_ALLOC_PATTERN, sizeof(tail->magic));
 	}
+
+	remove_hdr(hdr);
+
 	hdr = real_realloc(hdr,
 					   sizeof(memory_header_t) + bytes + sizeof(memory_tail_t));
 	tail = ((void*)hdr) + bytes + sizeof(memory_header_t);
@@ -983,7 +1016,10 @@ HOOK(void*, realloc, void *old, size_t bytes)
 	hdr->bytes = bytes;
 
 	before = enable_thread(FALSE);
-	hdr->backtrace->destroy(hdr->backtrace);
+	if (destroy_old_bt)
+	{
+		hdr->backtrace->destroy(hdr->backtrace);
+	}
 	hdr->backtrace = backtrace_create(2);
 	enable_thread(before);
 
@@ -1026,6 +1062,7 @@ leak_detective_t *leak_detective_create()
 		free(this);
 		return NULL;
 	}
+	ignore_unknown = getenv("LEAK_DETECTIVE_IGNORE_UNKNOWN") != NULL;
 
 	lock = spinlock_create();
 	thread_disabled = thread_value_create(NULL);
