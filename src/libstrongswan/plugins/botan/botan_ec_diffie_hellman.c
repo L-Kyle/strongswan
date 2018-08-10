@@ -75,8 +75,6 @@ METHOD(diffie_hellman_t, set_other_public_value, bool,
 	private_botan_ec_diffie_hellman_t *this, chunk_t value)
 {
 	botan_pk_op_ka_t ka;
-	uint8_t indic = 0x04;
-	size_t out_len = 0;
 
 	if (!diffie_hellman_verify_value(this->group, value))
 	{
@@ -89,23 +87,12 @@ METHOD(diffie_hellman_t, set_other_public_value, bool,
 	}
 
 	/* prepend 0x04 to indicate uncompressed point format */
-	value = chunk_cata("cc", chunk_from_thing(indic), value);
-	if (botan_pk_op_key_agreement(ka, NULL, &out_len, value.ptr, value.len,
-								  NULL, 0)
-		!= BOTAN_FFI_ERROR_INSUFFICIENT_BUFFER_SPACE)
-	{
-		botan_pk_op_key_agreement_destroy(ka);
-		return FALSE;
-	}
-
-	if (!out_len)
-	{
-		botan_pk_op_key_agreement_destroy(ka);
-		return FALSE;
-	}
+	value = chunk_cata("cc", chunk_from_chars(0x04), value);
 
 	chunk_clear(&this->shared_secret);
-	this->shared_secret = chunk_alloc(out_len);
+	/* the largest group is 521 bits */
+	this->shared_secret = chunk_alloc(66);
+
 	if (botan_pk_op_key_agreement(ka, this->shared_secret.ptr,
 								  &this->shared_secret.len, value.ptr,
 								  value.len, NULL, 0))

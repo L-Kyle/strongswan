@@ -105,16 +105,14 @@ METHOD(diffie_hellman_t, set_other_public_value, bool,
 	}
 
 	chunk_clear(&this->shared_secret);
-	botan_pk_op_key_agreement_create(&op, this->dh_key, "Raw", 0);
 
-	/* FIXME: not ideal as it derives the key twice */
-
-	/* get shared secret key size */
-	if (botan_pk_op_key_agreement(op, NULL, &this->shared_secret.len, value.ptr,
-								  value.len, NULL, 0)
-		!= BOTAN_FFI_ERROR_INSUFFICIENT_BUFFER_SPACE)
+	if (botan_mp_num_bytes(this->p, &this->shared_secret.len))
 	{
-		botan_pk_op_key_agreement_destroy(op);
+		return FALSE;
+	}
+
+	if (botan_pk_op_key_agreement_create(&op, this->dh_key, "Raw", 0))
+	{
 		return FALSE;
 	}
 
